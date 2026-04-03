@@ -17,10 +17,18 @@ fi
 
 cp main.py "main.py.bak.$(date +%Y%m%d_%H%M%S)"
 
-python3 << 'PYEOF'
-import ast, sys, re
+# Auto-cleanup: keep only the 5 most recent backups
+MAX_BACKUPS=5
+BACKUP_COUNT=$(ls -1 main.py.bak.* 2>/dev/null | wc -l)
+if [ "$BACKUP_COUNT" -gt "$MAX_BACKUPS" ]; then
+    ls -1t main.py.bak.* | tail -n +$((MAX_BACKUPS + 1)) | xargs rm -f
+    echo "Cleaned up old backups, kept latest $MAX_BACKUPS"
+fi
 
-f = '/opt/trading-api/main.py'
+python3 << PYEOF
+import ast, sys
+
+f = '${API_DIR}/main.py'
 with open(f, 'r') as fh:
     source = fh.read()
 
@@ -127,8 +135,18 @@ PYEOF
 
 python3 -m py_compile "$API_DIR/main.py" && echo "SYNTAX_OK"
 
-pkill -f uvicorn 2>/dev/null || true
-sleep 2
+# Stop only the trading-api uvicorn on port 8080 (avoid killing unrelated uvicorn processes)
+OLD_PID=$(lsof -ti:8080 2>/dev/null || ss -tlnp 2>/dev/null | grep ':8080' | grep -oP 'pid=\K[0-9]+')
+if [ -n "$OLD_PID" ]; then
+    echo "Stopping existing process on port 8080 (PID: $OLD_PID)"
+    kill "$OLD_PID" 2>/dev/null || true
+    sleep 2
+    # Force kill if still running
+    kill -0 "$OLD_PID" 2>/dev/null && kill -9 "$OLD_PID" 2>/dev/null || true
+    sleep 1
+else
+    echo "No existing process on port 8080"
+fi
 
 if [ ! -f "$API_DIR/venv/bin/uvicorn" ]; then
     echo "ERROR: uvicorn not found in venv"
@@ -138,6 +156,7 @@ fi
 cd "$API_DIR"
 nohup venv/bin/uvicorn main:app --host 0.0.0.0 --port 8080 > /tmp/trading.log 2>&1 &
 UVICORN_PID=$!
+echo "Started uvicorn (PID: $UVICORN_PID)"
 
 # Wait for server to be ready with retry
 MAX_RETRIES=5
