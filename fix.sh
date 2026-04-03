@@ -27,15 +27,18 @@ if [ "${1:-}" = "--check" ]; then
     log "Running in check-only mode (no modifications)"
 fi
 
-BACKUP_FILE="main.py.bak.$(date +%Y%m%d_%H%M%S)"
-cp main.py "$BACKUP_FILE"
-log "Backup created: $BACKUP_FILE"
+BACKUP_FILE=""
+if [ "$CHECK_ONLY" = "False" ]; then
+    BACKUP_FILE="main.py.bak.$(date +%Y%m%d_%H%M%S)"
+    cp main.py "$BACKUP_FILE"
+    log "Backup created: $BACKUP_FILE"
 
-# Auto-cleanup: keep only the most recent backups
-BACKUP_COUNT=$(ls -1 main.py.bak.* 2>/dev/null | wc -l)
-if [ "$BACKUP_COUNT" -gt "$MAX_BACKUPS" ]; then
-    ls -1t main.py.bak.* | tail -n +$((MAX_BACKUPS + 1)) | xargs rm -f
-    log "Cleaned up old backups, kept latest $MAX_BACKUPS"
+    # Auto-cleanup: keep only the most recent backups
+    BACKUP_COUNT=$(ls -1 main.py.bak.* 2>/dev/null | wc -l)
+    if [ "$BACKUP_COUNT" -gt "$MAX_BACKUPS" ]; then
+        ls -1t main.py.bak.* | tail -n +$((MAX_BACKUPS + 1)) | xargs rm -f
+        log "Cleaned up old backups, kept latest $MAX_BACKUPS"
+    fi
 fi
 
 # Run the Python fix engine; capture exit code without triggering set -e
@@ -178,16 +181,21 @@ if [ "$CHECK_ONLY" = "True" ]; then
 fi
 
 # --- Service restart ---
-OLD_PID=$(lsof -ti:"$PORT" 2>/dev/null || ss -tlnp 2>/dev/null | grep ":$PORT" | grep -oP 'pid=\K[0-9]+' || true)
-if [ -n "$OLD_PID" ]; then
-    log "Stopping existing process on port $PORT (PID: $OLD_PID)"
-    kill "$OLD_PID" 2>/dev/null || true
+OLD_PIDS=$(lsof -ti:"$PORT" 2>/dev/null || ss -tlnp 2>/dev/null | grep ":$PORT" | grep -oP 'pid=\K[0-9]+' || true)
+if [ -n "$OLD_PIDS" ]; then
+    for pid in $OLD_PIDS; do
+        log "Stopping existing process on port $PORT (PID: $pid)"
+        kill "$pid" 2>/dev/null || true
+    done
     sleep 2
-    # Force kill if still running
-    if kill -0 "$OLD_PID" 2>/dev/null; then
-        kill -9 "$OLD_PID" 2>/dev/null || true
-        sleep 1
-    fi
+    # Force kill any that are still running
+    for pid in $OLD_PIDS; do
+        if kill -0 "$pid" 2>/dev/null; then
+            log "Force killing PID: $pid"
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+    done
+    sleep 1
 else
     log "No existing process on port $PORT"
 fi
@@ -200,6 +208,16 @@ fi
 cd "$API_DIR"
 nohup venv/bin/uvicorn main:app --host 0.0.0.0 --port "$PORT" > /tmp/trading.log 2>&1 &
 UVICORN_PID=$!
+sleep 1
+
+# Verify uvicorn process is alive (didn't crash immediately)
+if ! kill -0 "$UVICORN_PID" 2>/dev/null; then
+    log "ERROR: uvicorn exited immediately after start"
+    if [ -f /tmp/trading.log ]; then
+        tail -10 /tmp/trading.log
+    fi
+    exit 1
+fi
 log "Started uvicorn (PID: $UVICORN_PID)"
 
 # --- Health check with retry ---

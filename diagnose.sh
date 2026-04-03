@@ -3,9 +3,9 @@
 
 API_DIR="/opt/trading-api"
 AGENT_LOG="/opt/nebula-agent/agent.log"
-HEALTH_URL="http://localhost:8080/health"
-TRADING_LOG="/tmp/trading.log"
 PORT=8080
+HEALTH_URL="http://localhost:${PORT}/health"
+TRADING_LOG="/tmp/trading.log"
 
 PASS=0
 WARN=0
@@ -28,6 +28,28 @@ echo ''
 
 # --- a. System resources ---
 echo '=== a. System resources ==='
+
+# Uptime
+if command -v uptime &>/dev/null; then
+    UPTIME_STR=$(uptime -p 2>/dev/null || uptime | sed 's/.*up /up /' | sed 's/,.*load.*//')
+    echo "  Uptime: $UPTIME_STR"
+fi
+
+# Load average
+LOAD_1MIN=$(awk '{print $1}' /proc/loadavg 2>/dev/null)
+if [ -n "$LOAD_1MIN" ]; then
+    CPU_COUNT=$(nproc 2>/dev/null || echo 1)
+    # Compare as integers (multiply by 100 to avoid float)
+    LOAD_X100=$(echo "$LOAD_1MIN" | awk '{printf "%d", $1 * 100}')
+    THRESHOLD=$((CPU_COUNT * 200))
+    if [ "$LOAD_X100" -ge "$THRESHOLD" ]; then
+        report WARN "Load average: $LOAD_1MIN (high, ${CPU_COUNT} CPUs)"
+    else
+        report PASS "Load average: $LOAD_1MIN (${CPU_COUNT} CPUs)"
+    fi
+fi
+
+# Disk
 DISK_USAGE=$(df -h / 2>/dev/null | awk 'NR==2{print $5}' | tr -d '%')
 if [ -n "$DISK_USAGE" ]; then
     if [ "$DISK_USAGE" -ge 90 ]; then
@@ -39,14 +61,18 @@ if [ -n "$DISK_USAGE" ]; then
     fi
 fi
 
+# Memory
 MEM_AVAIL=$(free -m 2>/dev/null | awk '/Mem:/{print $7}')
 if [ -n "$MEM_AVAIL" ]; then
+    MEM_TOTAL=$(free -m 2>/dev/null | awk '/Mem:/{print $2}')
+    MEM_USED=$((MEM_TOTAL - MEM_AVAIL))
+    MEM_PCT=$((MEM_USED * 100 / MEM_TOTAL))
     if [ "$MEM_AVAIL" -lt 100 ]; then
-        report FAIL "Available memory: ${MEM_AVAIL}MB (critical)"
+        report FAIL "Memory: ${MEM_USED}/${MEM_TOTAL}MB used (${MEM_PCT}%, critical)"
     elif [ "$MEM_AVAIL" -lt 500 ]; then
-        report WARN "Available memory: ${MEM_AVAIL}MB (low)"
+        report WARN "Memory: ${MEM_USED}/${MEM_TOTAL}MB used (${MEM_PCT}%, low)"
     else
-        report PASS "Available memory: ${MEM_AVAIL}MB"
+        report PASS "Memory: ${MEM_USED}/${MEM_TOTAL}MB used (${MEM_PCT}%)"
     fi
 fi
 echo ''
@@ -132,18 +158,18 @@ else
 fi
 
 if command -v ss &>/dev/null; then
-    PORT_8080=$(ss -tlnp 2>/dev/null | grep ':8080')
-    if [ -n "$PORT_8080" ]; then
-        report PASS "Port 8080 is listening"
+    PORT_LISTEN=$(ss -tlnp 2>/dev/null | grep ":$PORT")
+    if [ -n "$PORT_LISTEN" ]; then
+        report PASS "Port $PORT is listening"
     else
-        report FAIL "Port 8080 is not listening"
+        report FAIL "Port $PORT is not listening"
     fi
 elif command -v netstat &>/dev/null; then
-    PORT_8080=$(netstat -tlnp 2>/dev/null | grep ':8080')
-    if [ -n "$PORT_8080" ]; then
-        report PASS "Port 8080 is listening"
+    PORT_LISTEN=$(netstat -tlnp 2>/dev/null | grep ":$PORT")
+    if [ -n "$PORT_LISTEN" ]; then
+        report PASS "Port $PORT is listening"
     else
-        report FAIL "Port 8080 is not listening"
+        report FAIL "Port $PORT is not listening"
     fi
 fi
 echo ''
