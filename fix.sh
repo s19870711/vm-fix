@@ -18,7 +18,7 @@ fi
 cp main.py "main.py.bak.$(date +%Y%m%d_%H%M%S)"
 
 python3 << 'PYEOF'
-import ast, sys
+import ast, sys, re
 
 f = '/opt/trading-api/main.py'
 with open(f, 'r') as fh:
@@ -34,9 +34,24 @@ except SyntaxError as e:
 
 lines = source.splitlines(keepends=True)
 
+def detect_indent_char(lines):
+    """Detect whether the file uses tabs or spaces for indentation."""
+    for line in lines:
+        stripped = line.lstrip()
+        if stripped and line != stripped:
+            leading = line[:len(line) - len(stripped)]
+            if '\t' in leading:
+                return '\t'
+    return ' '
+
 def get_indent(line):
     """Return the indentation level of a non-blank line."""
     return len(line) - len(line.lstrip())
+
+def has_code_content(line):
+    """Check if a line has actual code (not just a comment or blank)."""
+    stripped = line.strip()
+    return stripped != '' and not stripped.startswith('#')
 
 def fix_try_blocks(lines):
     """Fix try blocks missing except/finally by iterating bottom-up.
@@ -44,6 +59,9 @@ def fix_try_blocks(lines):
     Bottom-up ensures nested try blocks are fixed before their parents,
     avoiding the issue where an outer try consumes an inner try's block.
     """
+    indent_char = detect_indent_char(lines)
+    indent_unit = 1 if indent_char == '\t' else 4
+
     # Collect all try statement line indices
     try_indices = []
     for idx, line in enumerate(lines):
@@ -55,11 +73,11 @@ def fix_try_blocks(lines):
         indent = get_indent(lines[ti])
         # Find the end of the try body: lines that are deeper or blank
         j = ti + 1
+        has_body = False
         while j < len(lines):
             l = lines[j]
             if l.strip() == '':
                 # Blank line: include only if followed by deeper-indented code
-                # that still belongs to this block
                 peek = j + 1
                 while peek < len(lines) and lines[peek].strip() == '':
                     peek += 1
@@ -68,6 +86,8 @@ def fix_try_blocks(lines):
                 else:
                     break
             elif get_indent(l) > indent:
+                if has_code_content(l):
+                    has_body = True
                 j += 1
             else:
                 break
@@ -78,9 +98,14 @@ def fix_try_blocks(lines):
             k += 1
 
         if k >= len(lines) or not lines[k].strip().startswith(('except', 'finally')):
+            body_indent = indent_char * (indent + indent_unit)
+            # If try body is empty or comment-only, add a pass statement
+            if not has_body:
+                lines.insert(j, body_indent + 'pass\n')
+                j += 1
             # Insert except clause at position j
-            except_line = ' ' * indent + 'except Exception:\n'
-            pass_line = ' ' * (indent + 4) + 'pass\n'
+            except_line = indent_char * indent + 'except Exception:\n'
+            pass_line = body_indent + 'pass\n'
             lines.insert(j, pass_line)
             lines.insert(j, except_line)
 
