@@ -5,6 +5,7 @@ API_DIR="/opt/trading-api"
 AGENT_LOG="/opt/nebula-agent/agent.log"
 HEALTH_URL="http://localhost:8080/health"
 TRADING_LOG="/tmp/trading.log"
+PORT=8080
 
 PASS=0
 WARN=0
@@ -21,6 +22,7 @@ report() {
 
 echo '======================================'
 echo '  VM Trading API - Diagnostic Report'
+echo "  $(date '+%Y-%m-%d %H:%M:%S')"
 echo '======================================'
 echo ''
 
@@ -71,14 +73,37 @@ fi
 
 if [ -f "$API_DIR/venv/bin/python" ]; then
     report PASS "Python venv exists"
+    VENV_PY_VER=$("$API_DIR/venv/bin/python" --version 2>&1)
+    echo "  Version: $VENV_PY_VER"
 else
     report WARN "Python venv not found at $API_DIR/venv"
 fi
 
 if [ -f "$API_DIR/venv/bin/uvicorn" ]; then
     report PASS "uvicorn installed in venv"
+    if [ -x "$API_DIR/venv/bin/uvicorn" ]; then
+        report PASS "uvicorn is executable"
+    else
+        report FAIL "uvicorn exists but is not executable"
+    fi
 else
     report FAIL "uvicorn not found in venv"
+fi
+
+# File permission checks
+if [ -f "$API_DIR/main.py" ]; then
+    if [ -r "$API_DIR/main.py" ]; then
+        report PASS "main.py is readable"
+    else
+        report FAIL "main.py is not readable (permission denied)"
+    fi
+fi
+
+# Check if data directory is writable (needed for runtime)
+if [ -d "$API_DIR/data" ] && [ -w "$API_DIR/data" ]; then
+    report PASS "Data directory is writable"
+elif [ -d "$API_DIR/data" ]; then
+    report WARN "Data directory is not writable"
 fi
 echo ''
 
